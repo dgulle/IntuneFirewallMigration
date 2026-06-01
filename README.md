@@ -1,186 +1,212 @@
-# 🔥🧱🪄 IntuneFirewallMigration
+---
+title: Intune Firewall Migration
+os: Windows
+microsoftPlatform: Intune
+language: PowerShell
+category: Provisioning
+runContext: Local
+elevation: Administrator
+readOnly: false
+tags: [firewall, settings-catalog, group-policy, migration, microsoft-graph]
+---
 
-IntuneFirewallMigration is an updated version of the no longer available [Microsoft tool](https://learn.microsoft.com/en-us/mem/intune/protect/endpoint-security-firewall-rule-tool) which was removed in June 2024 to support migration Group Policy and local firewall rules to Intune.
+# Intune Firewall Migration
 
-![Firewall Migration Tool](/img/mstool.png)
+`IntuneFirewallMigration.ps1` captures the Windows Defender Firewall rules applied to the local machine (via Group Policy and, optionally, locally defined rules) and creates equivalent Settings Catalog firewall rule profiles in Microsoft Intune.
 
-This version is a streamlined version of the Microsoft tool with the following changes:
+It is an updated, streamlined version of the retired [Microsoft Endpoint Manager Firewall Rule Migration Tool](https://learn.microsoft.com/en-us/mem/intune/protect/endpoint-security-firewall-rule-tool), which was removed in June 2024. This version uses Settings Catalog as the native target, supports filtering by direction and profile, and removes the legacy tooling and telemetry from the original.
 
-- **Uses Settings Catalog firewall rule policies natively**
-- **Allows for selection of only specific firewall profile rules (Domain, Private, Public)**
-- **Support for importing only inbound or outbound rules**
-- Removed the reliance on the old Microsoft GitHub repository.
-- Changed to the `Microsoft.Graph.Authentication` PowerShell module.
-- Changed to `Invoke-MgGraphRequest` for calls to Graph.
-- Disabled and removed all telemetry functions and calls.
-- Fixed issues when checking for profile name matching when there are no existing firewall rule policies.
-- Resolved issues with module `Microsoft.Graph` version 2.26.1 module on PowerShell 5.
+This solution has been recognised as part of the [MEM Official Community Tools](https://www.memcommunity.com/official-community-tool-oct).
 
-## 🏅 MEM Official Community Tool
+> [!NOTE]
+> This script was authored by [Nick Benton](https://github.com/ennnbeee) of [odds+endpoints](https://www.oddsandendpoints.co.uk/) and is vendored into this repo from the upstream [ennnbeee/IntuneFirewallMigration](https://github.com/ennnbeee/IntuneFirewallMigration) project. See [LICENSE](LICENSE) for the original MIT license.
 
-This script has been recognised as part of the [MEM Official Community Tools](https://www.memcommunity.com/official-community-tool-oct) and was carefully reviewed by a panel of industry experts.
+---
 
-This solution was evaluated based on technical value, originality, usefulness, and impact on the Endpoint Management ecosystem.
+## What the Script Does
 
-## ⚠ Public Preview Notice
+1. Reads Windows Defender Firewall rules applied to the local machine from Group Policy (and optionally locally defined rules).
+2. Filters the rule set based on the parameters supplied — direction (`inbound` / `outbound`), profile (`domain`, `private`, `public`, `all`, `notconfigured`), and enabled / disabled state.
+3. Deduplicates rule names and converts each rule into the Settings Catalog representation expected by the Intune Graph API.
+4. Connects to Microsoft Graph using either an interactive sign-in or an Entra ID app registration (tenant + client + secret).
+5. Creates one or more Settings Catalog firewall rule profiles in Intune, named with the supplied prefix and split into chunks of `splitRules` rules each (default `100`).
+6. Optionally creates legacy **Endpoint Security** firewall profiles instead of Settings Catalog profiles when `-legacyProfile` is supplied.
 
-IntuneFirewallMigration is currently in Public Preview, meaning that although it is functional, you may encounter issues or bugs with the script.
+---
 
-> [!TIP]
-> If you do encounter bugs, want to contribute, submit feedback or suggestions, please create an issue.
+## Key Differences From the Original Microsoft Tool
 
-## 🗒 Prerequisites
+- Creates **Settings Catalog** firewall rule policies natively.
+- Allows selection of only specific firewall profiles (`Domain`, `Private`, `Public`).
+- Supports importing only **inbound** or **outbound** rules.
+- Removes the dependency on the old Microsoft GitHub repository.
+- Uses the supported `Microsoft.Graph.Authentication` module and `Invoke-MgGraphRequest`.
+- Disables and removes all telemetry functions and calls.
+- Fixes profile-name matching when no existing firewall rule policies exist.
+- Resolves compatibility issues with `Microsoft.Graph` 2.26.1 on PowerShell 5.
 
-> [!IMPORTANT]
->
-> - Supports PowerShell 5 and 7 on Windows
-> - `Microsoft.Graph.Authentication` the script will detect and install if required.
-> - `ImportExcel` the script will detect and install if required.
-> - Entra ID App Registration with appropriate Graph Scopes or using Interactive Sign-In with a privileged account.
+![Firewall Migration Tool](img/mstool.png)
 
-## 🔄 Updates
+---
 
-- **v0.4.2**
-  - Better error handling
-  - Improved support for German Language rules
-- v0.4.1
-  - Resolved issues with rules containing local and remote address ranges.
-- v0.4.0
-  - Support for importing only inbound or outbound rules
-  - Support for non-english language Firewall rule descriptions
-  - Updated required Graph Permission scopes
-  - Re-order rule filtering for improved performance
-- v0.3.1
-  - Resolved an issue with missing file paths on rules
-- v0.3.0
-  - Able to upload only specific firewall profile rules from: domain, private, public, all, or not configured
-  - Duplicate rule names now shown as (1), (2) etc.
-  - Improved conversion of rules to Settings Catalog format
-- v0.2.1
-  - Ensures only unique firewall rules are created in Settings Catalog policies
-  - Improved duplicate firewall name handling
-- v0.2.0
-  - Creates Setting Catalog policies as standard
-  - Allows for creation of legacy Endpoint Security policies using the `legacyProfile` switch
-- v0.1.0
-  - Initial release
+## Requirements
 
-## 🔑 Permissions
+### PowerShell
 
-The PowerShell script requires the below Graph API permissions, you can create an Entra ID App Registration with the following Graph API Application permissions:
+- Windows PowerShell 5.1 or PowerShell 7, running **on Windows**.
 
-- `DeviceManagementConfiguration.ReadWrite.All`
+### Modules
 
-The script can then be authenticated by passing in the App Registration details:
+The script auto-detects and installs the following modules if they are missing:
 
-```PowerShell
-$tenantId = '437e8ffb-3030-469a-99da-e5b527908001'
-$appId = '375793fc-0132-4938-bc80-a907e5cba4d0'
-$appSecret = 'supersecretstuff'
+- `Microsoft.Graph.Authentication`
+- `ImportExcel`
+
+### Permissions
+
+- Local administrator on the source Windows device (required to read Group Policy firewall rules).
+- Intune permissions to create configuration profiles via Microsoft Graph:
+  - `DeviceManagementConfiguration.ReadWrite.All`
+
+Either:
+
+- An **Entra ID app registration** with the Graph application permission above, **or**
+- An interactive sign-in with an account that holds the equivalent delegated permission (typically Intune Administrator).
+
+### Source Device
+
+The script reads firewall rules from the **local machine**. Run it on a representative Windows device that already has the Group Policy firewall rules you want to migrate applied to it.
+
+---
+
+## Usage
+
+Clone or download this repository to the Windows machine where the firewall rules are applied, then run the script from inside the `Windows-IntuneFirewallMigration` folder.
+
+### Authenticating With an App Registration
+
+```powershell
+$tenantId  = '<your-tenant-id>'
+$appId     = '<your-app-id>'
+$appSecret = '<your-app-secret>'
 
 .\IntuneFirewallMigration.ps1 -profileName TestMigration -tenantId $tenantId -appId $appId -appSecret $appSecret
 ```
 
-## ⏯ Usage
+If `-tenantId`, `-appId`, and `-appSecret` are omitted, the script falls back to an interactive Graph sign-in.
 
-Clone or download this repository to the Windows machine where you want to capture Firewall Rules, then execute the following commands from within the extracted or cloned folder:
+### Test Run
 
-### 🧪 Testing
-
-Creates **Settings Catalog** Firewall rule profiles with the name prefix `TestMigration` using only the first **20** **enabled** **Group Policy** applied firewall rules:
+Creates Settings Catalog firewall rule profiles prefixed `TestMigration` using only the first **20 enabled Group Policy** rules:
 
 ```powershell
 .\IntuneFirewallMigration.ps1 -profileName TestMigration -mode Test
 ```
 
-### 🧱 General Usage
+### General Usage
 
-Creates **Settings Catalog** Firewall rule profiles with the name prefix `FirewallRules` with **100** rules per profile, using all **enabled** **Group Policy** applied firewall rules:
+Creates Settings Catalog firewall rule profiles prefixed `FirewallRules`, **100** rules per profile, from all enabled Group Policy rules:
 
 ```powershell
 .\IntuneFirewallMigration.ps1 -profileName FirewallRules
 ```
 
-### ⬅ Inbound Rules
-
-Creates **Settings Catalog** Firewall rule profiles with the name prefix `InboundFirewallRules` with **100** rules per profile, using all **enabled** **Group Policy** applied firewall rules, only uploading **inbound** profile rules:
+### Inbound Rules Only
 
 ```powershell
 .\IntuneFirewallMigration.ps1 -profileName InboundFirewallRules -ruleDirection inbound
 ```
 
-### ➡ Outbound Rules
-
-Creates **Settings Catalog** Firewall rule profiles with the name prefix `OutboundFirewallRules` with **100** rules per profile, using all **enabled** **Group Policy** applied firewall rules, only uploading **outbound** profile rules:
+### Outbound Rules Only
 
 ```powershell
 .\IntuneFirewallMigration.ps1 -profileName OutboundFirewallRules -ruleDirection outbound
 ```
 
-### 🏢 Domain Profile Rules
-
-Creates **Settings Catalog** Firewall rule profiles with the name prefix `DomainFirewallRules` with **100** rules per profile, using all **enabled** **Group Policy** applied firewall rules, only uploading **domain** profile rules:
+### Domain Profile Rules Only
 
 ```powershell
 .\IntuneFirewallMigration.ps1 -profileName DomainFirewallRules -firewallProfile domain
 ```
 
-### 🤫 Private Profile Rules
-
-Creates **Settings Catalog** Firewall rule profiles with the name prefix `PrivateFirewallRules` with **100** rules per profile, using all **enabled** **Group Policy** applied firewall rules, only uploading **private** profile rules:
+### Private Profile Rules Only
 
 ```powershell
 .\IntuneFirewallMigration.ps1 -profileName PrivateFirewallRules -firewallProfile private
 ```
 
-### 🏞 Public Profile Rules
-
-Creates **Settings Catalog** Firewall rule profiles with the name prefix `PublicFirewallRules` with **100** rules per profile, using all **enabled** **Group Policy** applied firewall rules, only uploading **public** profile rules:
+### Public Profile Rules Only
 
 ```powershell
 .\IntuneFirewallMigration.ps1 -profileName PublicFirewallRules -firewallProfile public
 ```
 
-### 🏠 Local Rules
+### Include Locally Defined Rules
 
-Creates **Settings Catalog** Firewall rule profiles with the name prefix `LocalFirewallRules` with **70** rules per profile, using all **enabled** **Group Policy and Locally** applied firewall rules:
+Includes rules defined locally on the device in addition to Group Policy rules, with 70 rules per profile:
 
 ```powershell
 .\IntuneFirewallMigration.ps1 -profileName LocalFirewallRules -includeLocalRules -splitRules 70
 ```
 
-### 📐 Disabled Rules
+### Include Disabled Rules
 
-Creates **Settings Catalog** Firewall rule profiles with the name prefix `DisabledFirewallRules` with **50** rules per profile, using all **enabled and disabled** **Group Policy** applied firewall rules:
+Includes disabled rules alongside enabled ones, with 50 rules per profile:
 
 ```powershell
 .\IntuneFirewallMigration.ps1 -profileName DisabledFirewallRules -includeDisabledRules -splitRules 50
 ```
 
-### ⚙ Endpoint Security Profiles
+### Legacy Endpoint Security Profiles
 
-> [!IMPORTANT]
-> These legacy Profiles don't appear in Intune immediately, looks like they are processed behind the scenes and converted now.
-
-Creates **Endpoint Security** Firewall rule profiles with the name prefix `LegacyProfileFirewallRules` with **100** rules per profile, using all **enabled** **Group Policy** applied firewall rules:
+Creates the legacy Endpoint Security firewall rule profiles instead of Settings Catalog profiles:
 
 ```powershell
 .\IntuneFirewallMigration.ps1 -profileName LegacyProfileFirewallRules -legacyProfile
 ```
 
-## 🚑 Support
-
-If you encounter any issues or have questions:
-
-1. Check the [Issues](https://github.com/ennnbeee/IntuneFirewallMigration/issues) page
-2. Open a new issue if needed
-
-Thank you for your support.
-
-## 📜 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+> [!IMPORTANT]
+> Legacy Endpoint Security profiles do not appear in the Intune portal immediately — they are processed and converted in the background.
 
 ---
 
-Created by [Nick Benton](https://github.com/ennnbeee) of [odds+endpoints](https://www.oddsandendpoints.co.uk/)
+## Parameter Reference
+
+| Parameter | Description |
+|---|---|
+| `-profileName` | Name prefix used for the created Intune profiles. |
+| `-mode` | `Test` to limit to the first 20 rules; omit for a full run. |
+| `-ruleDirection` | `inbound` or `outbound`. Omit to include both. |
+| `-firewallProfile` | `domain`, `private`, `public`, `all`, or `notconfigured`. Omit to include all profiles. |
+| `-includeLocalRules` | Include rules defined locally on the device in addition to GPO rules. |
+| `-includeDisabledRules` | Include disabled rules in addition to enabled rules. |
+| `-splitRules` | Maximum rules per Settings Catalog profile (default `100`). |
+| `-legacyProfile` | Create legacy Endpoint Security firewall profiles instead of Settings Catalog. |
+| `-tenantId`, `-appId`, `-appSecret` | Entra ID app registration credentials. All three are required for non-interactive authentication. |
+
+---
+
+## Notes
+
+- This script **creates** Intune configuration profiles in the target tenant. It does not assign them to any group — review and assign the resulting profiles manually before relying on them.
+- Run the script on a device that already has the source GPO firewall rules applied, otherwise there will be nothing to migrate.
+- The upstream project is currently in **Public Preview**. Issues and contributions should be raised against the [upstream repository](https://github.com/ennnbeee/IntuneFirewallMigration/issues).
+
+---
+
+## Version History
+
+- **v0.4.2** — Better error handling; improved support for German-language rules.
+- **v0.4.1** — Resolved issues with rules containing local and remote address ranges.
+- **v0.4.0** — Inbound/outbound filtering; non-English rule descriptions; updated Graph scopes; reordered rule filtering for performance.
+- **v0.3.1** — Resolved an issue with missing file paths on rules.
+- **v0.3.0** — Per-profile rule selection; duplicate rule names suffixed `(1)`, `(2)`; improved Settings Catalog conversion.
+- **v0.2.1** — Only unique rules created in Settings Catalog policies; better duplicate handling.
+- **v0.2.0** — Settings Catalog as the default; `-legacyProfile` switch for Endpoint Security policies.
+- **v0.1.0** — Initial release.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE). Original work © [Nick Benton](https://github.com/ennnbeee).
